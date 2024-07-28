@@ -3,17 +3,68 @@ import url from 'url'
 import WebTorrent from 'webtorrent'
 
 const DEBUG = false
-
+const TOKEN_EXPIRATION = 1000 * 60 * 60 * 24 // 1 day
 const client = new WebTorrent()
 
 let myTorrent = null
+let authenticationGarbageCollectorIndex = 0
+
+// ['token', timestamp]
+let authenticatedUsersMap = new Map()
+
+function removeExpiredTokens() {
+  authenticatedUsersMap.forEach((value, key) => {
+    console.log('Checking token:', key)
+    if (Date.now() - value > TOKEN_EXPIRATION) {
+      authenticatedUsersMap.delete(key)
+    }
+  })
+}
+
+async function checkUserAuthentication(token) {
+  if(authenticatedUsersMap.has(token)) {
+    // Check if the token is expired
+    if (Date.now() - authenticatedUsersMap.get(token) > TOKEN_EXPIRATION) {
+      authenticatedUsersMap.delete(token)
+      return false
+    }
+    return true
+  } else {
+    // check if user is allowed to stream
+    const userResponse = await fetch(`https://dev.opentrust.it/api/collections/mov_users/records?perPage=1`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `${token}`
+      }
+    });
+
+    if (userResponse.status === 200) {
+      const user = await userResponse.json();
+      if (user && user.items && user.items.length > 0) {
+        authenticatedUsersMap.set(token, Date.now())
+        return true
+      }
+    }
+
+    return false
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true)
   const pathname = parsedUrl.pathname
   const query = parsedUrl.query
 
-  if (pathname === '/stream' && query.magnet) {
+  if (
+    pathname === '/stream' &&
+    query.magnet &&
+    query.token &&
+    await checkUserAuthentication(query.token)
+  ) {
+    authenticationGarbageCollectorIndex++
+    if (authenticationGarbageCollectorIndex > 100) {
+      removeExpiredTokens()
+    }
     const torrentId = query.magnet
 
     if (DEBUG) {

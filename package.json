@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "pocketbase": "^0.21.4",
     "webtorrent": "^2.4.12"
   },
   "type": "module"
