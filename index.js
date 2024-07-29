@@ -1,6 +1,10 @@
 import http from 'http'
 import url from 'url'
 import WebTorrent from 'webtorrent'
+import ffmpegPath from 'ffmpeg-static'
+import Ffmpeg from 'fluent-ffmpeg'
+import fs from 'fs'
+import { PassThrough } from 'stream'
 
 const DEBUG = false
 const TOKEN_EXPIRATION = 1000 * 60 * 60 * 24 // 1 day
@@ -9,8 +13,29 @@ const client = new WebTorrent()
 let myTorrent = null
 let authenticationGarbageCollectorIndex = 0
 
+Ffmpeg.setFfmpegPath(ffmpegPath)
+
 // ['token', timestamp]
 let authenticatedUsersMap = new Map()
+
+// function convertMkvStreamToMp4(inputStream) {
+//   const outputStream = new PassThrough(); // Create a PassThrough stream to handle the output
+
+//   Ffmpeg(inputStream)
+//       .outputFormat('mp4') // Set the output format to MP4
+//       .videoCodec('libx264') // Set the video codec to libx264 (H.264)
+//       .audioCodec('aac') // Set the audio codec to AAC
+//       .on('error', (err) => {
+//           console.error('Error during conversion:', err);
+//           outputStream.emit('error', err); // Emit error on the output stream
+//       })
+//       .on('end', () => console.log('Finished!'))
+//       .pipe(outputStream, {
+//         end: true
+//       }); // Pipe the ffmpeg output to the PassThrough stream
+
+//   return outputStream; // Return the PassThrough stream
+// }
 
 function removeExpiredTokens() {
   authenticatedUsersMap.forEach((value, key) => {
@@ -94,7 +119,33 @@ const server = http.createServer(async (req, res) => {
         return
       }
 
-      const file = torrent.files.find(file => file.name.endsWith('.mp4'))
+      const fileTypes = [
+        { type: 'mp4', mime: 'video/mp4' },
+        { type: 'mkv', mime: 'video/x-matroska' },
+        { type: 'avi', mime: 'video/x-msvideo' },
+        { type: 'mov', mime: 'video/quicktime' },
+        { type: 'flv', mime: 'video/x-flv' },
+        { type: 'wmv', mime: 'video/x-ms-wmv' },
+        { type: 'webm', mime: 'video/webm' },
+        { type: 'mpg', mime: 'video/mpeg' },
+        { type: 'mpeg', mime: 'video/mpeg' },
+        { type: 'm4v', mime: 'video/x-m4v' },
+        { type: '3gp', mime: 'video/3gpp' },
+        { type: '3g2', mime: 'video/3gpp2' },
+        { type: 'ogg', mime: 'video/ogg' },
+        { type: 'ogv', mime: 'video/ogg' }
+      ];
+
+      // const file = torrent.files.find(file => file.name.endsWith('.mp4'))
+
+      // print torrent file names
+      torrent.files.forEach(file => {
+        console.log('File:', file.name)
+      })
+
+      const file = torrent.files.find(file => {
+        return fileTypes.some(fileType => file.name.endsWith(`.${fileType.type}`))
+      })
 
       if (file) {
         const range = req.headers.range
@@ -115,6 +166,8 @@ const server = http.createServer(async (req, res) => {
           return
         }
 
+        // const mime = fileTypes.find(fileType => file.name.endsWith(`.${fileType.type}`)).mime
+
         const chunksize = (end - start) + 1
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${fileSize}`,
@@ -123,26 +176,29 @@ const server = http.createServer(async (req, res) => {
           'Content-Type': 'video/mp4'
         })
 
-        const stream = file.createReadStream({ start, end })
-        stream.pipe(res)
+        console.log('Streaming:', file.name, start, end)
 
-        stream.on('error', err => {
-          if (DEBUG) {
-            console.error('Stream error:', err)
-          }
-          res.end()
-        })
+        const stream = file.createReadStream({ start, end });
+        // const mp4Stream = convertMkvStreamToMp4(inStream);
 
-        res.on('close', () => {
-          stream.destroy()
-        })
+        var proc = new Ffmpeg(stream)
+          .outputOptions(['-movflags isml+frag_keyframe'])
+          .toFormat('mp4')
+          .withAudioCodec('copy')
+          //.seekInput(offset) this is a problem with piping
+          .on('error', function(err,stdout,stderr) {
+              console.log('an error happened: ' + err.message);
+              console.log('ffmpeg stdout: ' + stdout);
+              console.log('ffmpeg stderr: ' + stderr);
+          })
+          .on('end', function() {
+              console.log('Processing finished !');
+          })
+          .on('progress', function(progress) {
+              console.log('Processing: ' + progress.percent + '% done');
+          })
+          .pipe(res, {end: true});
 
-        res.on('error', err => {
-          if (DEBUG) {
-            console.error('Response error:', err)
-          }
-          stream.destroy()
-        })
       } else {
         if (!res.headersSent) {
           res.writeHead(404, { 'Content-Type': 'text/plain' })
