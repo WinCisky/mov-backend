@@ -176,28 +176,43 @@ const server = http.createServer(async (req, res) => {
           'Content-Type': 'video/mp4'
         })
 
-        console.log('Streaming:', file.name, start, end)
+        console.log('Streaming:', file.name, start, end, chunksize)
 
-        const stream = file.createReadStream({ start, end });
-        // const mp4Stream = convertMkvStreamToMp4(inStream);
+        const stream = file.createReadStream({ start, end});
 
-        var proc = new Ffmpeg(stream)
-          .outputOptions(['-movflags isml+frag_keyframe'])
-          .toFormat('mp4')
-          .withAudioCodec('copy')
-          //.seekInput(offset) this is a problem with piping
-          .on('error', function(err,stdout,stderr) {
-              console.log('an error happened: ' + err.message);
-              console.log('ffmpeg stdout: ' + stdout);
-              console.log('ffmpeg stderr: ' + stderr);
-          })
-          .on('end', function() {
-              console.log('Processing finished !');
-          })
-          .on('progress', function(progress) {
-              console.log('Processing: ' + progress.percent + '% done');
-          })
-          .pipe(res, {end: true});
+        // Path to the output MP4 video chunk
+        const outputPath = './tmp/chunk.mp4';
+        // Start time of the chunk (e.g., '00:01:00' for 1 minute)
+        const startTime = '00:01:00';
+        // Duration of the chunk (e.g., '00:00:30' for 30 seconds)
+        const duration = '00:00:30';
+
+        function convertVideoStream(inputStream, output, start, duration) {
+          return new Promise((resolve, reject) => {
+            Ffmpeg(inputStream)
+              .setStartTime(start)
+              .setDuration(duration)
+              .format('mp4')
+              .output(output)
+              .on('end', () => {
+                console.log('Conversion finished');
+                resolve();
+              })
+              .on('error', (err) => {
+                console.error('Conversion error:', err);
+                reject(err);
+              })
+              .run();
+          });
+        }
+
+        convertVideoStream(stream, outputPath, startTime, duration)
+        .then(() => {
+          console.log('Video chunk conversion successful');
+        })
+        .catch((error) => {
+          console.error('Error during video chunk conversion:', error);
+        });
 
       } else {
         if (!res.headersSent) {
